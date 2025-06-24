@@ -322,7 +322,8 @@ async def generate_music_file(
 
 @app.get("/samples")
 @limiter.limit("1/minute")
-async def get_samples(api_key: str = Depends(verify_api_key)):
+async def get_samples(request: Request, api_key: str = Depends(verify_api_key)):
+    
     """Получить список всех доступных сэмплов (для отладки)"""
     try:
         samples = await db_manager.fetch_samples()
