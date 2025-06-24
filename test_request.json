@@ -1,0 +1,45 @@
+{
+        "address": "0:db6275ca113779a8eb07b3b9e66ea95c72d4598de421720123d4a0b76a75f591",
+        "index": 1,
+        "metadata": {
+          "name": "Music NFT #2",
+          "description": "A unique music NFT from the TON collection",
+          "image": "https://salmon-key-halibut-684.mypinata.cloud/ipfs/bafkreicebtr2wvra4g4q4od2zgqioul4ttugl3kfwmf33wdbwffuh6mv3q",
+          "attributes": [
+            {
+              "trait_type": "Melody",
+              "value": "Melody_2"
+            },
+            {
+              "trait_type": "Drums",
+              "value": "Drums_2"
+            },
+            {
+              "trait_type": "Bass",
+              "value": "Bass_2"
+            },
+            {
+              "trait_type": "Vocal",
+              "value": "Probably_Nothing"
+            },
+            {
+              "trait_type": "Feature",
+              "value": "None"
+            },
+            {
+              "trait_type": "Bpm",
+              "value": 113
+            },
+            {
+              "trait_type": "Bassboost",
+              "value": "True"
+            }
+          ]
+        },
+        "collection": {
+          "address": "0:e39cae7cf260b3d26a0bf94df7509275e1bd813ffa043d19e6be9352bdf42dda",
+          "name": "Music NFT Collection Test #3"
+        },
+        "verified": true,
+        "trust": "none"
+      }

@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+asyncpg
+aiohttp
+pyloudnorm
+soundfile
+numpy
+scipy
+python-dotenv
