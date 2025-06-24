@@ -10,11 +10,18 @@ from typing import Dict, Any, Iterator, Optional
 from io import BytesIO
 import json
 import os
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 
 from database import db_manager
 from audio_downloader import audio_downloader
 from music_generator import streaming_music_generator
 from config import server_config
+
+limiter = Limiter(key_func=get_remote_address)
 
 # URL Node.js сервера для проверки API ключей
 NODE_SERVER_URL = os.getenv("NODE_SERVER_URL", "http://localhost:3000")
@@ -58,7 +65,7 @@ async def verify_music_api_key(x_music_api_key: Optional[str] = Header(None)):
     except Exception as e:
         print(f"Неожиданная ошибка при проверке API ключа: {e}")
         raise HTTPException(status_code=500, detail="Ошибка проверки API ключа")
-
+    
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Управление жизненным циклом приложения"""
@@ -78,6 +85,15 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+
+# Обработчик ошибок лимита
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Слишком много запросов. Пожалуйста, попробуйте позже."},
+        headers={"Retry-After": str(exc.detail.retry_after)}
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -158,6 +174,7 @@ async def health_check():
     }
 
 @app.post("/generate-music-stream")
+@limiter.limit("10/minute")
 async def generate_music_stream(
     request: Request,
     auth_data: dict = Depends(verify_music_api_key)
@@ -197,6 +214,7 @@ async def generate_music_stream(
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 @app.post("/generate-music")
+@limiter.limit("5/minute")
 async def generate_music(
     request: Request,
     auth_data: dict = Depends(verify_music_api_key)
@@ -256,6 +274,7 @@ async def generate_music(
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 @app.post("/generate-music-file")
+@limiter.limit("3/minute")
 async def generate_music_file(
     request: Request,
     auth_data: dict = Depends(verify_music_api_key)
@@ -302,6 +321,7 @@ async def generate_music_file(
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 @app.get("/samples")
+@limiter.limit("1/minute")
 async def get_samples(api_key: str = Depends(verify_api_key)):
     """Получить список всех доступных сэмплов (для отладки)"""
     try:

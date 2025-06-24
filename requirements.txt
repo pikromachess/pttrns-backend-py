@@ -7,3 +7,4 @@ soundfile
 scipy
 python-dotenv
 python-multipart
+slowapi
