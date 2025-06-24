@@ -1,9 +1,0 @@
-*.pyc
-__pycache__/
-.env
-.git/
-.gitignore
-README.md
-output/
-*.log
-.DS_Store
