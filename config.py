@@ -34,7 +34,7 @@ class IPFSConfig:
 @dataclass
 class ServerConfig:
     host: str = os.getenv("HOST", "0.0.0.0")
-    port: str = os.getenv("PORT", "8000")
+    port: int = int(os.getenv("PORT", "8000"))
     output_dir: str = os.getenv("OUTPUT_DIR", "./output")
     debug: bool = os.getenv("DEBUG", "false").lower() == "true"
     
