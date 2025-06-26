@@ -33,11 +33,14 @@ class IPFSConfig:
 
 @dataclass
 class ServerConfig:
-    """Конфигурация сервера"""
-    host: str = "0.0.0.0"  # Railway требует 0.0.0.0
-    port: int = int(os.getenv("PORT", "8000"))  # Railway использует переменную PORT
-    output_dir: str = os.getenv("OUTPUT_DIR", "/app/output")
-    max_file_size: int = int(os.getenv("MAX_FILE_SIZE", "50"))  # Уменьшено для Railway
+    host: str = os.getenv("HOST", "0.0.0.0")
+    port: int = int(os.getenv("PORT", "8000"))
+    output_dir: str = os.getenv("OUTPUT_DIR", "./output")
+    debug: bool = os.getenv("DEBUG", "false").lower() == "true"
+    
+    def __post_init__(self):
+        # Создаем output директорию если не существует
+        os.makedirs(self.output_dir, exist_ok=True)
 
 # Глобальные конфигурации
 db_config = DatabaseConfig()
