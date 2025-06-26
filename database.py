@@ -11,28 +11,14 @@ class DatabaseManager:
     async def create_pool(self):
         """Создает пул соединений с базой данных"""
         try:
-            # Используем DATABASE_URL если доступен (Railway)
-            if db_config.database_url:
-                print("Подключение к БД через DATABASE_URL")
-                self.pool = await asyncpg.create_pool(
-                    db_config.database_url,
-                    min_size=1,
-                    max_size=5,  # Уменьшено для Railway
-                    command_timeout=60
-                )
-            else:
-                print("Подключение к БД через отдельные параметры")
-                # Fallback на отдельные параметры
-                self.pool = await asyncpg.create_pool(
-                    user=db_config.user,
-                    password=db_config.password,
-                    database=db_config.database,
-                    host=db_config.host,
-                    port=db_config.port,
-                    min_size=1,
-                    max_size=5,
-                    command_timeout=60
-                )
+                       
+            print("Подключение к БД через DATABASE_URL")
+            self.pool = await asyncpg.create_pool(
+                db_config.database_url,
+                min_size=1,
+                max_size=5,  
+                command_timeout=60
+            )            
             print("Пул соединений с базой данных создан успешно")
         except Exception as e:
             print(f"Ошибка создания пула соединений: {e}")

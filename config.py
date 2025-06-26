@@ -6,16 +6,8 @@ load_dotenv()
 
 @dataclass
 class DatabaseConfig:
-    """Конфигурация базы данных"""
-    # Railway предоставляет DATABASE_URL
-    database_url: str = os.getenv("DATABASE_URL")
-    
-    # Fallback на отдельные переменные
-    user: str = os.getenv("DB_USER", "postgres")
-    password: str = os.getenv("DB_PASSWORD", "")
-    database: str = os.getenv("DB_NAME", "railway")
-    host: str = os.getenv("DB_HOST", "postgres.railway.internal")
-    port: int = int(os.getenv("DB_PORT", "5432"))
+    """Конфигурация базы данных"""    
+    database_url: str = os.getenv("DATABASE_URL")   
 
 @dataclass
 class AudioConfig:
@@ -34,7 +26,7 @@ class IPFSConfig:
 @dataclass
 class ServerConfig:
     host: str = os.getenv("HOST", "0.0.0.0")
-    port = 8000
+    port: int = int(os.getenv("PORT", "8000"))
     output_dir: str = os.getenv("OUTPUT_DIR", "./output")
     debug: bool = os.getenv("DEBUG", "false").lower() == "true"
     

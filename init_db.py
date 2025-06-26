@@ -4,19 +4,9 @@ import os
 
 async def init_database():
     """Инициализация базы данных"""
-    # Получаем параметры подключения из Railway
-    database_url = os.getenv('DATABASE_URL')
     
-    if database_url:
-        conn = await asyncpg.connect(database_url)
-    else:
-        conn = await asyncpg.connect(
-            host=os.getenv('DB_HOST'),
-            port=int(os.getenv('DB_PORT', 5432)),
-            user=os.getenv('DB_USER'),
-            password=os.getenv('DB_PASSWORD'),
-            database=os.getenv('DB_NAME')
-        )
+    database_url = os.getenv('DATABASE_URL')      
+    conn = await asyncpg.connect(database_url)    
     
     # Создание таблицы samples
     await conn.execute('''
