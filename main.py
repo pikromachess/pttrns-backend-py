@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, Header
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 import uvicorn
@@ -13,8 +13,6 @@ import os
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 import secrets
@@ -148,7 +146,7 @@ async def validate_nft_request(request: Request) -> dict:
         raise  # Пробрасываем HTTP исключения как есть
     except Exception as e:
         error_info = SecureErrorHandler.handle_error(e, "nft_request_validation")
-        await SecureLogger.error("nft_validation_unexpected_error", e, {"error_code": error_info.code})
+        await SecureLogger.error("nft_validation_unexpected_error", e, {"error_code": error_info["code"]})
         raise HTTPException(status_code=500, detail="Request validation failed")
 
 async def verify_api_key(api_key: str = Depends(api_key_header)):
@@ -196,7 +194,7 @@ async def verify_music_api_key(x_music_api_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=503, detail="Сервис проверки ключей недоступен")
     except Exception as e:
         error_info = SecureErrorHandler.handle_error(e, "api_key_validation")
-        await SecureLogger.error("api_key_validation_error", e, {"error_code": error_info.code})
+        await SecureLogger.error("api_key_validation_error", e, {"error_code": error_info["code"]})
         raise HTTPException(status_code=500, detail="Ошибка проверки API ключа")
     
 @asynccontextmanager
@@ -205,6 +203,24 @@ async def lifespan(app: FastAPI):
     print("Запуск сервера...")
     await db_manager.create_pool()
     print("Подключение к базе данных установлено")
+    
+    # Запускаем задачу очистки rate limiter
+    asyncio.create_task(cleanup_task())
+    
+    # Запускаем задачу очистки CSRF токенов
+    async def csrf_cleanup():
+        while True:
+            await asyncio.sleep(300)  # Каждые 5 минут
+            csrf_protection.cleanup_expired_tokens()
+    
+    asyncio.create_task(csrf_cleanup())
+    
+    await SecureLogger.info("server_started", {
+        "version": "2.0.0",
+        "security_enabled": True,
+        "csrf_enabled": True,
+        "rate_limiting_enabled": True
+    })
     
     yield
     
@@ -374,7 +390,7 @@ async def generate_music_stream(
                 "Transfer-Encoding": "chunked",
                 "X-Streaming": "true",
                 # Удаляем X-User-Address для приватности
-                **security_settings.SECURITY_HEADERS
+                **SecuritySettings.SECURITY_HEADERS
             }
         )
         
@@ -383,44 +399,10 @@ async def generate_music_stream(
     except Exception as e:
         error_info = SecureErrorHandler.handle_error(e, "music_generation_stream")
         await SecureLogger.error("music_generation_stream_failed", e, {
-            "error_code": error_info.code,
+            "error_code": error_info["code"],
             "user_address": auth_data.get("address", "unknown")[:10] + "..."
         })
-        raise HTTPException(status_code=500, detail=error_info.message)
-    
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Управление жизненным циклом приложения"""
-    print("Запуск сервера...")
-    await db_manager.create_pool()
-    print("Подключение к базе данных установлено")
-    
-    # ДОБАВИТЬ СЮДА startup логику:
-    # Запускаем задачу очистки rate limiter
-    asyncio.create_task(cleanup_task())
-    
-    # Запускаем задачу очистки CSRF токенов
-    async def csrf_cleanup():
-        while True:
-            await asyncio.sleep(300)  # Каждые 5 минут
-            csrf_protection.cleanup_expired_tokens()
-    
-    asyncio.create_task(csrf_cleanup())
-    
-    await SecureLogger.info("server_started", {
-        "version": "2.0.0",
-        "security_enabled": True,
-        "csrf_enabled": True,
-        "rate_limiting_enabled": True
-    })
-    
-    yield
-    
-    print("Завершение работы сервера...")
-    await db_manager.close_pool()
-    print("Соединения с базой данных закрыты")
-    
+        raise HTTPException(status_code=500, detail=error_info["message"])
 
 @app.post("/generate-music")
 async def generate_music(
@@ -476,7 +458,7 @@ async def generate_music(
                 "Pragma": "no-cache",
                 "Expires": "0",
                 # Удаляем X-User-Address для приватности
-                **security_settings.SECURITY_HEADERS
+                **SecuritySettings.SECURITY_HEADERS
             }
         )
         
@@ -485,10 +467,10 @@ async def generate_music(
     except Exception as e:
         error_info = SecureErrorHandler.handle_error(e, "music_generation_full")
         await SecureLogger.error("music_generation_full_failed", e, {
-            "error_code": error_info.code,
+            "error_code": error_info["code"],
             "user_address": user_address[:10] + "..."
         })
-        raise HTTPException(status_code=500, detail=error_info.message)
+        raise HTTPException(status_code=500, detail=error_info["message"])
 
 @app.post("/generate-music-file")
 async def generate_music_file(
@@ -549,10 +531,10 @@ async def generate_music_file(
     except Exception as e:
         error_info = SecureErrorHandler.handle_error(e, "music_generation_file")
         await SecureLogger.error("music_generation_file_failed", e, {
-            "error_code": error_info.code,
+            "error_code": error_info["code"],
             "user_address": user_address[:10] + "..."
         })
-        raise HTTPException(status_code=500, detail=error_info.message)
+        raise HTTPException(status_code=500, detail=error_info["message"])
 
 @app.get("/samples")
 @limiter.limit("1/minute")

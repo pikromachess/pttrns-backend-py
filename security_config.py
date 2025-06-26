@@ -1,62 +1,60 @@
 import os
-from typing import List
-from pydantic import BaseSettings
+from typing import List, Dict
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-class SecuritySettings(BaseSettings):
-    # CORS настройки
-    ALLOWED_ORIGINS: List[str] = [
-        "https://your-domain.com",
-        "https://www.your-domain.com"
-    ]
+class SecuritySettings:
+    """Упрощённые настройки безопасности без Pydantic"""
     
-    # В development режиме добавляем localhost
-    if os.getenv("ENVIRONMENT") == "development":
-        ALLOWED_ORIGINS.extend([
-            "http://localhost:3000",
-            "http://localhost:5173",
-            "http://127.0.0.1:3000",
-            "http://127.0.0.1:5173"
-        ])
+    def __init__(self):
+        # CORS настройки
+        self.ALLOWED_ORIGINS = [
+            "https://pikromachess-pttrns-frontend-dc0f.twc1.net"            
+        ]
+        
+        # В development режиме добавляем localhost
+        if os.getenv("ENVIRONMENT", "development") == "development":
+            self.ALLOWED_ORIGINS.extend([
+                "http://localhost:3000",
+                "http://localhost:5173", 
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:5173"
+            ])
+        
+        # Rate limiting
+        self.RATE_LIMIT_ENABLED = True
+        self.RATE_LIMIT_STORAGE_URL = "memory://"
+        
+        # Session settings
+        self.SESSION_COOKIE_SECURE = os.getenv("ENVIRONMENT") != "development"
+        self.SESSION_COOKIE_HTTPONLY = True
+        self.SESSION_COOKIE_SAMESITE = "strict"
+        
+        # API настройки
+        self.API_KEY_EXPIRY_HOURS = 1
+        self.MAX_REQUEST_SIZE = 10 * 1024 * 1024  # 10MB
+        
+        # Validation настройки
+        self.MAX_JSON_SIZE = 1024 * 1024  # 1MB
+        self.MAX_STRING_LENGTH = 1000
+        self.MAX_ARRAY_SIZE = 100
     
-    # Headers безопасности
+    # Headers безопасности (статическая константа)
     SECURITY_HEADERS = {
         "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
+        "X-Frame-Options": "DENY", 
         "X-XSS-Protection": "1; mode=block",
         "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
         "Referrer-Policy": "strict-origin-when-cross-origin",
         "Permissions-Policy": "geolocation=(), microphone=(), camera=()"
     }
-    
-    # Rate limiting
-    RATE_LIMIT_ENABLED: bool = True
-    RATE_LIMIT_STORAGE_URL: str = "memory://"
-    
-    # Session settings
-    SESSION_COOKIE_SECURE: bool = True
-    SESSION_COOKIE_HTTPONLY: bool = True
-    SESSION_COOKIE_SAMESITE: str = "strict"
-    
-    # API настройки
-    API_KEY_EXPIRY_HOURS: int = 1
-    MAX_REQUEST_SIZE: int = 10 * 1024 * 1024  # 10MB
-    
-    # Validation настройки
-    MAX_JSON_SIZE: int = 1024 * 1024  # 1MB
-    MAX_STRING_LENGTH: int = 1000
-    MAX_ARRAY_SIZE: int = 100
-    
-    class Config:
-        env_file = ".env"
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         
         # Добавляем security headers
-        for header, value in security_settings.SECURITY_HEADERS.items():
+        for header, value in SecuritySettings.SECURITY_HEADERS.items():
             response.headers[header] = value
         
         # Удаляем headers, раскрывающие информацию о сервере
@@ -66,13 +64,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Улучшенная CSP политика:
         csp_policy = (
             "default-src 'self'; "
-            "script-src 'self'; "  # Убираем 'unsafe-inline'
-            "style-src 'self' 'unsafe-inline'; "  # Оставляем только для стилей
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https:; "
-            "connect-src 'self' https:; "  # Разрешаем HTTPS соединения
+            "connect-src 'self' https:; "
             "font-src 'self' data:; "
             "object-src 'none'; "
-            "media-src 'self' blob:; "  # Для аудио потоков
+            "media-src 'self' blob:; "
             "frame-src 'none'; "
             "base-uri 'self'; "
             "form-action 'self'; "
