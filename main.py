@@ -84,7 +84,7 @@ class SimpleRateLimiter:
     def __init__(self):
         self.requests = {}
     
-    def check_limit(self, client_ip: str, max_requests: int = 5, window: int = 60) -> bool:
+    def check_limit(self, client_ip: str, max_requests: int = 10, window: int = 60) -> bool:
         current_time = time.time()
         
         if client_ip not in self.requests:
