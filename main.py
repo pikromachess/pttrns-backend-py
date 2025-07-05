@@ -1,10 +1,13 @@
 import os
 import sys
 import logging
+import jwt
+import time
+import hashlib
 from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import APIKeyHeader
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import asyncio
 import aiohttp
@@ -58,15 +61,27 @@ def safe_import_config():
             debug = os.getenv("DEBUG", "false").lower() == "true"
         return FallbackConfig()
 
+def safe_import_validator():
+    try:
+        from input_validator import InputValidator
+        logger.info("✅ Validator модуль импортирован")
+        return InputValidator()
+    except ImportError as e:
+        logger.warning(f"⚠️ Validator модуль недоступен: {e}")
+        return None
+
 # Безопасные импорты
 db_manager = safe_import()
 audio_downloader, streaming_music_generator = safe_import_audio()
 server_config = safe_import_config()
+validator = safe_import_validator()
 
 # Базовые настройки
 NODE_SERVER_URL = os.getenv("NODE_SERVER_URL", "http://localhost:3000")
-API_KEY = os.getenv("API_KEY", "your-secret-key")
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+BACKEND_SECRET = os.getenv("BACKEND_SECRET", "MY_SECRET_FROM_ENV")
+
+# Настройки аутентификации
+security = HTTPBearer()
 
 # Упрощенная конфигурация CORS
 ALLOWED_ORIGINS = [
@@ -79,34 +94,77 @@ if os.getenv("ENVIRONMENT", "development") == "development":
         "http://localhost:5173"
     ])
 
-# Упрощенный rate limiter без внешних зависимостей
-class SimpleRateLimiter:
+# Упрощенный rate limiter для сессий
+class SessionRateLimiter:
     def __init__(self):
         self.requests = {}
     
-    def check_limit(self, client_ip: str, max_requests: int = 10, window: int = 60) -> bool:
+    def check_session_limit(self, user_address: str, max_requests: int = 10, window: int = 60) -> bool:
         current_time = time.time()
         
-        if client_ip not in self.requests:
-            self.requests[client_ip] = []
+        if user_address not in self.requests:
+            self.requests[user_address] = []
         
         # Удаляем старые запросы
-        self.requests[client_ip] = [
-            req_time for req_time in self.requests[client_ip] 
+        self.requests[user_address] = [
+            req_time for req_time in self.requests[user_address] 
             if current_time - req_time < window
         ]
         
-        if len(self.requests[client_ip]) >= max_requests:
+        if len(self.requests[user_address]) >= max_requests:
             return False
         
-        self.requests[client_ip].append(current_time)
+        self.requests[user_address].append(current_time)
         return True
 
-rate_limiter = SimpleRateLimiter()
+session_rate_limiter = SessionRateLimiter()
 
-# Упрощенная валидация
-def validate_nft_request_simple(data: dict) -> dict:
-    """Упрощенная валидация без внешних модулей"""
+# Проверка сессионного токена
+async def verify_session_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    
+    try:
+        # Декодируем JWT токен
+        payload = jwt.decode(token, BACKEND_SECRET, algorithms=["HS256"])
+        
+        # Проверяем тип токена
+        if payload.get("type") != "listening_session":
+            raise HTTPException(status_code=401, detail="Неверный тип токена")
+        
+        # Проверяем срок действия (если не указан exp, проверяем timestamp + 1 час)
+        current_time = int(time.time())
+        token_timestamp = payload.get("timestamp", 0)
+        
+        # Токен действует 1 час
+        if current_time - token_timestamp > 3600:
+            raise HTTPException(status_code=401, detail="Сессия истекла")
+        
+        user_address = payload.get("address")
+        if not user_address:
+            raise HTTPException(status_code=401, detail="Некорректный токен сессии")
+        
+        # Проверяем rate limiting для пользователя
+        if not session_rate_limiter.check_session_limit(user_address):
+            raise HTTPException(status_code=429, detail="Превышен лимит запросов для пользователя")
+        
+        return {
+            "address": user_address,
+            "domain": payload.get("domain"),
+            "timestamp": token_timestamp,
+            "valid": True
+        }
+        
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Сессия истекла")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Недействительный токен сессии")
+    except Exception as e:
+        logger.error(f"Ошибка проверки токена: {e}")
+        raise HTTPException(status_code=401, detail="Ошибка проверки токена")
+
+# Упрощенная валидация запроса
+def validate_music_request(data: dict) -> dict:
+    """Упрощенная валидация музыкального запроса"""
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Request must be a JSON object")
     
@@ -116,25 +174,24 @@ def validate_nft_request_simple(data: dict) -> dict:
     
     # Проверяем обязательные поля
     if not metadata.get("name"):
-        raise HTTPException(status_code=400, detail="Name is required")
+        raise HTTPException(status_code=400, detail="Name is required in metadata")
+    
+    # Если есть validator, используем его
+    if validator:
+        try:
+            validation_result = validator.validate_nft_metadata(metadata)
+            if not validation_result["is_valid"]:
+                raise HTTPException(status_code=400, detail=validation_result["error"])
+            data["metadata"] = validation_result["sanitized"]
+        except Exception as e:
+            logger.warning(f"Ошибка валидации: {e}")
     
     return data
-
-# Упрощенная проверка API ключей
-async def verify_music_api_key_simple(x_music_api_key: Optional[str] = Header(None)):
-    if not x_music_api_key:
-        raise HTTPException(status_code=401, detail="API ключ не предоставлен")
-    
-    # Упрощенная проверка формата
-    if len(x_music_api_key) < 10:
-        raise HTTPException(status_code=401, detail="Недействительный API ключ")
-    
-    return {"address": "validated_user", "valid": True}
 
 # Lifespan с упрощенной логикой
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 Запуск сервера на Timeweb Cloud...")
+    logger.info("🚀 Запуск музыкального сервера...")
     
     # Проверяем доступность базы данных
     if db_manager:
@@ -159,8 +216,8 @@ async def lifespan(app: FastAPI):
 # Создание приложения
 app = FastAPI(
     title="NFT Music Generator API",
-    description="API для потоковой генерации музыки из NFT метаданных",
-    version="2.0.0",
+    description="API для потоковой генерации музыки из NFT метаданных с аутентификацией через сессии",
+    version="2.1.0",
     lifespan=lifespan,
     docs_url="/docs" if server_config.debug else None,
     redoc_url="/redoc" if server_config.debug else None,
@@ -181,7 +238,8 @@ async def root():
     return {
         "message": "NFT Streaming Music Generator API",
         "status": "running",
-        "version": "2.0.0",
+        "version": "2.1.0",
+        "authentication": "session-based",
         "platform": "Timeweb Cloud",
         "streaming": True,
         "format": "WAV",
@@ -202,6 +260,7 @@ async def health_check():
         "status": "healthy",
         "database": db_status,
         "streaming_enabled": True,
+        "session_auth": True,
         "timestamp": time.time(),
         "port": server_config.port
     }
@@ -209,29 +268,30 @@ async def health_check():
 @app.post("/generate-music-stream")
 async def generate_music_stream_endpoint(
     request: Request,
-    auth_data: dict = Depends(verify_music_api_key_simple)
+    session_data: dict = Depends(verify_session_token)
 ):
     try:
-        # Rate limiting
-        client_ip = request.client.host if request.client else "unknown"
-        if not rate_limiter.check_limit(client_ip):
-            raise HTTPException(status_code=429, detail="Слишком много запросов")
-        
         # Валидация запроса
         request_data = await request.json()
-        validated_data = validate_nft_request_simple(request_data)
+        validated_data = validate_music_request(request_data)
         
-        logger.info(f"Генерация музыки для пользователя: {auth_data.get('address', 'unknown')}")
+        user_address = session_data["address"]
+        logger.info(f"🎵 Генерация музыки для пользователя: {user_address}")
+        logger.info(f"📝 NFT: {validated_data['metadata'].get('name', 'Unknown')}")
         
         # Если доступны полные модули - используем их
         if streaming_music_generator and audio_downloader and db_manager:
             try:
+                logger.info("🔍 Загружаем сэмплы из базы данных...")
                 samples = await db_manager.fetch_samples()
+                
+                logger.info("📦 Скачиваем аудио файлы для NFT...")
                 file_info = await audio_downloader.download_nft_audio_files(
                     validated_data["metadata"], samples
                 )
                 
                 if file_info:
+                    logger.info("🎼 Генерируем музыку из сэмплов...")
                     return StreamingResponse(
                         streaming_music_generator.generate_music_stream(
                             validated_data["metadata"], file_info
@@ -240,53 +300,78 @@ async def generate_music_stream_endpoint(
                         headers={
                             "Content-Disposition": "inline; filename=nft_music.wav",
                             "Cache-Control": "no-cache",
+                            "X-Generated-For": hashlib.sha256(user_address.encode()).hexdigest()[:8],
                         }
                     )
+                else:
+                    logger.warning("⚠️ Не удалось загрузить аудио файлы")
+                    
             except Exception as e:
-                logger.error(f"Ошибка полной генерации: {e}")
-        
-        # Fallback - простая генерация
-        logger.info("Используем упрощенную генерацию музыки")
-        return StreamingResponse(
-            generate_simple_audio_stream(),
-            media_type="audio/wav",
-            headers={
-                "Content-Disposition": "inline; filename=test_audio.wav",
-                "Cache-Control": "no-cache",
-            }
-        )
+                logger.error(f"❌ Ошибка полной генерации: {e}")                
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Ошибка генерации музыки: {e}")
+        logger.error(f"❌ Ошибка генерации музыки: {e}")
         raise HTTPException(status_code=500, detail="Ошибка генерации музыки")
 
 @app.get("/samples")
-async def get_samples():
+async def get_samples(session_data: dict = Depends(verify_session_token)):
+    """Получение списка доступных сэмплов (требует аутентификации)"""
     if not db_manager:
         return {"count": 0, "samples": [], "status": "database_not_available"}
     
     try:
         samples = await db_manager.fetch_samples()
-        return {"count": len(samples), "samples": samples}
+        user_address = session_data["address"]
+        
+        logger.info(f"📊 Пользователь {user_address} запросил список сэмплов")
+        
+        return {
+            "count": len(samples), 
+            "samples": samples,
+            "user": hashlib.sha256(user_address.encode()).hexdigest()[:8]
+        }
     except Exception as e:
-        logger.error(f"Ошибка получения сэмплов: {e}")
+        logger.error(f"❌ Ошибка получения сэмплов: {e}")
         return {"count": 0, "samples": [], "error": str(e)}
+
+@app.get("/session/info")
+async def get_session_info(session_data: dict = Depends(verify_session_token)):
+    """Получение информации о текущей сессии"""
+    return {
+        "user": hashlib.sha256(session_data["address"].encode()).hexdigest()[:8],
+        "domain": session_data["domain"],
+        "timestamp": session_data["timestamp"],
+        "expires_in": max(0, 3600 - (int(time.time()) - session_data["timestamp"])),
+        "valid": True
+    }
 
 # Обработчик 404
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc):
     return JSONResponse(
         status_code=404,
-        content={"detail": "Endpoint not found"}
+        content={"detail": "Endpoint not found", "available_endpoints": ["/", "/health", "/generate-music-stream", "/samples", "/session/info"]}
+    )
+
+# Обработчик ошибок аутентификации
+@app.exception_handler(401)
+async def auth_error_handler(request: Request, exc):
+    return JSONResponse(
+        status_code=401,
+        content={
+            "detail": "Authentication required", 
+            "info": "Obtain session token from main backend /api/session/create"
+        }
     )
 
 # Главная функция запуска
 def main():
-    logger.info(f"🚀 Запуск сервера на {server_config.host}:{server_config.port}")
+    logger.info(f"🚀 Запуск музыкального сервера на {server_config.host}:{server_config.port}")
     logger.info(f"🔗 Node.js сервер: {NODE_SERVER_URL}")
-    logger.info("🎵 Режим: Упрощенная потоковая генерация")
+    logger.info("🔐 Режим: Аутентификация через сессии")
+    logger.info("🎵 Поддержка: Потоковая генерация музыки")
     
     # Убеждаемся, что порт корректный
     port = server_config.port
