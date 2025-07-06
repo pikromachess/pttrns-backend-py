@@ -124,28 +124,38 @@ async def verify_session_token(credentials: HTTPAuthorizationCredentials = Depen
     token = credentials.credentials
     
     try:
+        logger.info(f"🔑 Проверяем сессионный токен: {token[:20]}...")
+        
         # Декодируем JWT токен
         payload = jwt.decode(token, BACKEND_SECRET, algorithms=["HS256"])
+        logger.info(f"📋 Payload токена: {payload}")
         
         # Проверяем тип токена
-        if payload.get("type") != "listening_session":
+        token_type = payload.get("type")
+        if token_type != "listening_session":
+            logger.warning(f"❌ Неверный тип токена: {token_type}")
             raise HTTPException(status_code=401, detail="Неверный тип токена")
         
-        # Проверяем срок действия (если не указан exp, проверяем timestamp + 1 час)
+        # Проверяем срок действия
         current_time = int(time.time())
         token_timestamp = payload.get("timestamp", 0)
         
         # Токен действует 1 час
         if current_time - token_timestamp > 3600:
+            logger.warning(f"⏰ Токен истек: current={current_time}, token={token_timestamp}")
             raise HTTPException(status_code=401, detail="Сессия истекла")
         
         user_address = payload.get("address")
         if not user_address:
+            logger.warning("❌ Отсутствует адрес в токене")
             raise HTTPException(status_code=401, detail="Некорректный токен сессии")
         
         # Проверяем rate limiting для пользователя
         if not session_rate_limiter.check_session_limit(user_address):
+            logger.warning(f"⚠️ Rate limit для пользователя {user_address}")
             raise HTTPException(status_code=429, detail="Превышен лимит запросов для пользователя")
+        
+        logger.info(f"✅ Токен валиден для адреса: {user_address}")
         
         return {
             "address": user_address,
@@ -155,11 +165,13 @@ async def verify_session_token(credentials: HTTPAuthorizationCredentials = Depen
         }
         
     except jwt.ExpiredSignatureError:
+        logger.warning("❌ Токен истек (ExpiredSignatureError)")
         raise HTTPException(status_code=401, detail="Сессия истекла")
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"❌ Недействительный токен: {e}")
         raise HTTPException(status_code=401, detail="Недействительный токен сессии")
     except Exception as e:
-        logger.error(f"Ошибка проверки токена: {e}")
+        logger.error(f"❌ Ошибка проверки токена: {e}")
         raise HTTPException(status_code=401, detail="Ошибка проверки токена")
 
 # Упрощенная валидация запроса
@@ -285,6 +297,10 @@ async def generate_music_stream_endpoint(
                 logger.info("🔍 Загружаем сэмплы из базы данных...")
                 samples = await db_manager.fetch_samples()
                 
+                if not samples:
+                    logger.warning("⚠️ Сэмплы не найдены в базе данных")
+                    raise HTTPException(status_code=503, detail="Сэмплы недоступны")
+                
                 logger.info("📦 Скачиваем аудио файлы для NFT...")
                 file_info = await audio_downloader.download_nft_audio_files(
                     validated_data["metadata"], samples
@@ -305,14 +321,19 @@ async def generate_music_stream_endpoint(
                     )
                 else:
                     logger.warning("⚠️ Не удалось загрузить аудио файлы")
+                    raise HTTPException(status_code=500, detail="Не удалось загрузить аудио файлы")
                     
             except Exception as e:
-                logger.error(f"❌ Ошибка полной генерации: {e}")                
-        
+                logger.error(f"❌ Ошибка полной генерации: {e}")
+                raise HTTPException(status_code=500, detail=f"Ошибка генерации музыки: {str(e)}")
+        else:
+            logger.error("❌ Модули генерации музыки недоступны")
+            raise HTTPException(status_code=503, detail="Сервис генерации музыки недоступен")
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Ошибка генерации музыки: {e}")
+        logger.error(f"❌ Неожиданная ошибка генерации музыки: {e}")
         raise HTTPException(status_code=500, detail="Ошибка генерации музыки")
 
 @app.get("/samples")
