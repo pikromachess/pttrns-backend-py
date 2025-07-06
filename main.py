@@ -119,14 +119,12 @@ class SessionRateLimiter:
 
 session_rate_limiter = SessionRateLimiter()
 
-# Проверка сессионного токена
+# ИСПРАВЛЕННАЯ проверка сессионного токена
 async def verify_session_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     
     try:
         logger.info(f"🔑 Проверяем сессионный токен: {token[:20]}...")
-        
-        # Декодируем JWT токен
         payload = jwt.decode(token, BACKEND_SECRET, algorithms=["HS256"])
         logger.info(f"📋 Payload токена: {payload}")
         
@@ -136,13 +134,12 @@ async def verify_session_token(credentials: HTTPAuthorizationCredentials = Depen
             logger.warning(f"❌ Неверный тип токена: {token_type}")
             raise HTTPException(status_code=401, detail="Неверный тип токена")
         
-        # Проверяем срок действия
+        # ИСПРАВЛЕННАЯ проверка срока действия - используем exp из JWT
         current_time = int(time.time())
-        token_timestamp = payload.get("timestamp", 0)
+        exp_time = payload.get("exp", 0)
         
-        # Токен действует 1 час
-        if current_time - token_timestamp > 3600:
-            logger.warning(f"⏰ Токен истек: current={current_time}, token={token_timestamp}")
+        if current_time > exp_time:
+            logger.warning(f"⏰ Токен истек: current={current_time}, exp={exp_time}")
             raise HTTPException(status_code=401, detail="Сессия истекла")
         
         user_address = payload.get("address")
@@ -160,7 +157,8 @@ async def verify_session_token(credentials: HTTPAuthorizationCredentials = Depen
         return {
             "address": user_address,
             "domain": payload.get("domain"),
-            "timestamp": token_timestamp,
+            "timestamp": payload.get("timestamp", payload.get("iat", current_time)),
+            "exp": exp_time,
             "valid": True
         }
         
@@ -360,11 +358,15 @@ async def get_samples(session_data: dict = Depends(verify_session_token)):
 @app.get("/session/info")
 async def get_session_info(session_data: dict = Depends(verify_session_token)):
     """Получение информации о текущей сессии"""
+    current_time = int(time.time())
+    expires_in = max(0, session_data["exp"] - current_time)
+    
     return {
         "user": hashlib.sha256(session_data["address"].encode()).hexdigest()[:8],
         "domain": session_data["domain"],
         "timestamp": session_data["timestamp"],
-        "expires_in": max(0, 3600 - (int(time.time()) - session_data["timestamp"])),
+        "expires_in": expires_in,
+        "expires_at": session_data["exp"],
         "valid": True
     }
 
