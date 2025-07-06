@@ -119,14 +119,48 @@ class SessionRateLimiter:
 
 session_rate_limiter = SessionRateLimiter()
 
-# ИСПРАВЛЕННАЯ проверка сессионного токена
+# Проверка сессионного токена
 async def verify_session_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    Полная проверка сессионного токена с валидацией подписи
+    """
     token = credentials.credentials
     
     try:
-        logger.info(f"🔑 Проверяем сессионный токен: {token[:20]}...")
-        payload = jwt.decode(token, BACKEND_SECRET, algorithms=["HS256"])
+        logger.info(f"🔑 Проверяем сессионный токен: {token[:20]}...")        
+        
+        try:
+            payload = jwt.decode(
+                token, 
+                BACKEND_SECRET, 
+                algorithms=["HS256"],  # Строго указываем алгоритм
+                verify=True,           # Явно включаем проверку
+                options={
+                    "verify_signature": True,    # Проверяем подпись
+                    "verify_exp": True,          # Проверяем срок действия
+                    "verify_iat": True,          # Проверяем время создания
+                    "require_exp": True,         # Требуем поле exp
+                    "require_iat": True,         # Требуем поле iat
+                }
+            )
+        except jwt.InvalidSignatureError:
+            logger.warning("❌ Недействительная подпись токена")
+            raise HTTPException(status_code=401, detail="Недействительная подпись токена")
+        except jwt.ExpiredSignatureError:
+            logger.warning("❌ Токен истек (ExpiredSignatureError)")
+            raise HTTPException(status_code=401, detail="Сессия истекла")
+        except jwt.InvalidTokenError as e:
+            logger.warning(f"❌ Недействительный токен: {e}")
+            raise HTTPException(status_code=401, detail="Недействительный токен сессии")
+        
         logger.info(f"📋 Payload токена: {payload}")
+        
+        # Проверяем обязательные поля токена
+        required_fields = ["type", "address", "exp", "iat"]
+        for field in required_fields:
+            if field not in payload:
+                logger.warning(f"❌ Отсутствует обязательное поле: {field}")
+                raise HTTPException(status_code=401, detail=f"Некорректный токен: отсутствует {field}")
         
         # Проверяем тип токена
         token_type = payload.get("type")
@@ -134,43 +168,51 @@ async def verify_session_token(credentials: HTTPAuthorizationCredentials = Depen
             logger.warning(f"❌ Неверный тип токена: {token_type}")
             raise HTTPException(status_code=401, detail="Неверный тип токена")
         
-        # ИСПРАВЛЕННАЯ проверка срока действия - используем exp из JWT
+        # Проверяем время создания токена (не слишком старый)
         current_time = int(time.time())
-        exp_time = payload.get("exp", 0)
+        iat_time = payload.get("iat", 0)
         
+        # Токен не должен быть создан более чем за час
+        max_token_age = 60 * 60
+        if current_time - iat_time > max_token_age:
+            logger.warning(f"⏰ Токен слишком старый: iat={iat_time}, current={current_time}")
+            raise HTTPException(status_code=401, detail="Токен слишком старый")
+        
+        # Проверяем срок действия (дублируем проверку для надежности)
+        exp_time = payload.get("exp", 0)
         if current_time > exp_time:
             logger.warning(f"⏰ Токен истек: current={current_time}, exp={exp_time}")
             raise HTTPException(status_code=401, detail="Сессия истекла")
         
+        # Извлекаем и валидируем адрес пользователя
         user_address = payload.get("address")
-        if not user_address:
-            logger.warning("❌ Отсутствует адрес в токене")
-            raise HTTPException(status_code=401, detail="Некорректный токен сессии")
+        if not user_address or not isinstance(user_address, str):
+            logger.warning("❌ Отсутствует или некорректный адрес в токене")
+            raise HTTPException(status_code=401, detail="Некорректный токен сессии")  
         
         # Проверяем rate limiting для пользователя
         if not session_rate_limiter.check_session_limit(user_address):
             logger.warning(f"⚠️ Rate limit для пользователя {user_address}")
             raise HTTPException(status_code=429, detail="Превышен лимит запросов для пользователя")
         
-        logger.info(f"✅ Токен валиден для адреса: {user_address}")
+        logger.info(f"✅ Токен полностью валиден для адреса: {user_address}")
         
         return {
             "address": user_address,
             "domain": payload.get("domain"),
-            "timestamp": payload.get("timestamp", payload.get("iat", current_time)),
+            "timestamp": payload.get("iat", current_time),
             "exp": exp_time,
+            "token_age": current_time - iat_time,
             "valid": True
         }
         
-    except jwt.ExpiredSignatureError:
-        logger.warning("❌ Токен истек (ExpiredSignatureError)")
-        raise HTTPException(status_code=401, detail="Сессия истекла")
-    except jwt.InvalidTokenError as e:
-        logger.warning(f"❌ Недействительный токен: {e}")
-        raise HTTPException(status_code=401, detail="Недействительный токен сессии")
+    except HTTPException:
+        # Перебрасываем HTTP исключения как есть
+        raise
     except Exception as e:
-        logger.error(f"❌ Ошибка проверки токена: {e}")
+        logger.error(f"❌ Неожиданная ошибка проверки токена: {e}")
         raise HTTPException(status_code=401, detail="Ошибка проверки токена")
+
 
 # Упрощенная валидация запроса
 def validate_music_request(data: dict) -> dict:
